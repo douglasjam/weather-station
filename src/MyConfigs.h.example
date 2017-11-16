@@ -1,8 +1,0 @@
-#define WIFI_SSID ""
-#define WIFI_PWD ""
-
-#define THINGSPEAK_KEY 00000
-#define THINGSPEAK_CHANNEL "1234567890"
-
-#DEFINE INFLUX_HOST "url.website.com"
-#DEFINE INFLUX_URL "/write?db=dbname&u=user&p=pass"

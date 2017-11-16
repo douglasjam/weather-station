@@ -1,83 +1,71 @@
 #include <Wire.h>
 #include <SPI.h>
+#include <TimedAction.h>
 
-#include <MyAnalogic.cpp>
-#include <MyDigital.cpp>
-#include <MyWifi.cpp>
-#include <MyOled.cpp>
-#include <MyBMP.cpp>
-#include <MyInfluxDb.cpp>
-#include <MyTimer.cpp>
+#include <Djam/Analogic/SmokeSensor.h>
+#include <Djam/Digital/Buttons.h>
+#include <Djam/Internet/Wifi.h>
+#include <Djam/I2C/Oled.h>
+#include <Djam/I2C/BMP280.h>
+#include <Djam/Internet/InfluxDB.h>
 
-MyDigital myDigital;
-MyAnalogic myAnalogic;
-MyWifi myWifi;
-MyOled myOled;
-MyBMP myBMP;
-MyInfluxDb myInfluxDb;
-MyTimer myTimer;
+Djam::Digital::Buttons buttons;
+Djam::Analogic::SmokeSensor smokeSensor;
+Djam::Internet::Wifi wifi;
+Djam::Internet::InfluxDB influxDB;
+Djam::I2C::Oled oled;
+Djam::I2C::BMP280 bmp280;
+
+TimedAction *thread100ms;
+TimedAction *thread1s;
+TimedAction *thread1m;
 
 //-- flow control
-unsigned int oledPage = 0;
 unsigned long oledActiveUntil;
 bool oledPermanent;
 
+//-- input states
+bool lastStateGreen;
+bool lastStateWhite;
+
 //-- sensors values
-double co2;
+double smoke;
 double temperature;
 double pressure;
 int sinalStrength;
 
 void submitData(){
-  myInfluxDb.sendData(temperature, pressure, sinalStrength, co2);
+  influxDB.sendData(temperature, pressure, sinalStrength, smoke);
 }
 
 void readSensors(){
-    temperature = myBMP.getTemperature();
-    pressure = myBMP.getPressure();
-    sinalStrength = myWifi.getSinalStrength();
-    co2 = myAnalogic.getCO2();
+    temperature = bmp280.getTemperature();
+    oled.setPageValue(smokeSensor.getName(), String(temperature));
+
+    pressure = bmp280.getPressure();
+    oled.setPageValue(smokeSensor.getName(), String(pressure));
+
+    smoke = smokeSensor.getValue();
+    oled.setPageValue(smokeSensor.getName(), String(smoke));
+
+    sinalStrength = wifi.getSinalStrength();
 }
 
 void rotateDisplay(){
-
     readSensors();
-    String message = "";
 
     if(oledPermanent && oledActiveUntil < millis()){
-      myOled.printMessage("");
+      oled.printMessage("");
       return;
     }
 
-    if(oledPage < 5){
-      message = String("Temperature: ")  + String(temperature, 2);
-      myOled.printMessage(message);
-      oledPage++;
-      return;
-    } else if(oledPage < 10) {
-     message = String("Pressure: ") + String(pressure, 2);
-     myOled.printMessage(message);
-     oledPage++;
-     return;
-   } else if(oledPage < 15) {
-    message = String("CO2: ") + String(co2);
-    myOled.printMessage(message);
-    oledPage++;
-    return;
-  } else if(oledPage < 20) {
-    message = String("SinalStrength: ") + String(sinalStrength);
-    myOled.printMessage(message);
-   oledPage++;
-   return;
- } else {
-    oledPage = 0;
- }
+    oled.printNextPage();
 }
 
 void readInputs(){
 
-  unsigned int whiteStatus = myDigital.getWhiteStatus();
-  unsigned int greenStatus = myDigital.getGreenStatus();
+  unsigned int whiteStatus = buttons.getWhiteStatus();
+  unsigned int greenStatus = buttons.getGreenStatus();
 
   if(greenStatus == 2){
     oledPermanent = true;
@@ -92,26 +80,33 @@ void readInputs(){
   }
 
   if(whiteStatus == 2){
-    oledPage+=5;
-    oledActiveUntil = millis() + MyTimer::_10s;
+    oled.printNextPage();
+    oledActiveUntil = millis() + 10000;
     rotateDisplay();
   }
 }
 
 void setup() {
     Serial.begin(9600);
+    influxDB.setup();
+    wifi.setup();
 
-    myWifi.setup();
-    myOled.setup();
-    myBMP.setup();
-    myDigital.setup();
-    myAnalogic.setup();
+    oled.addPage(smokeSensor.getName());
+    oled.addPage(bmp280.getPressureLabel());
+    oled.addPage(bmp280.getTemperatureLabel());
 
-    myTimer.set100ms(&readInputs);
-    myTimer.set1s(&rotateDisplay);
-    myTimer.set1m(&submitData);
+    bmp280.setup();
+    buttons.setup();
+
+    smokeSensor.setup();
+
+    thread100ms = new TimedAction(300, readInputs);
+    thread1s = new TimedAction(5000, rotateDisplay);
+    thread1m = new TimedAction(60000, submitData);
 }
 
 void loop() {
-  myTimer.run();
+  thread100ms->check();
+  thread1s->check();
+  thread1m->check();
 }
