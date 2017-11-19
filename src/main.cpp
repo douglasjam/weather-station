@@ -2,111 +2,59 @@
 #include <SPI.h>
 #include <TimedAction.h>
 
-#include <Djam/Analogic/SmokeSensor.h>
-#include <Djam/Digital/Buttons.h>
 #include <Djam/Internet/Wifi.h>
-#include <Djam/I2C/Oled.h>
-#include <Djam/I2C/BMP280.h>
-#include <Djam/Internet/InfluxDB.h>
+#include <Djam/Digital/DoorSensor.h>
+#include <Djam/Internet/Telegram.h>
+#include <Djam/Bot/Bot.h>
+#include <Djam/Utils/TimeUtil.h>
 
-Djam::Digital::Buttons buttons;
-Djam::Analogic::SmokeSensor smokeSensor;
 Djam::Internet::Wifi wifi;
-Djam::Internet::InfluxDB influxDB;
-Djam::I2C::Oled oled;
-Djam::I2C::BMP280 bmp280;
+Djam::Digital::DoorSensor doorSensor;
+Djam::Internet::Telegram telegram;
+Djam::Bot::Bot bot;
+Djam::Utils::TimeUtil timeUtil;
 
 TimedAction *thread100ms;
 TimedAction *thread1s;
 TimedAction *thread1m;
 
-//-- flow control
-unsigned long oledActiveUntil;
-bool oledPermanent;
+void scanSensors(){
+  String doorNewState = doorSensor.getValue();
 
-//-- input states
-bool lastStateGreen;
-bool lastStateWhite;
-
-//-- sensors values
-double smoke;
-double temperature;
-double pressure;
-int sinalStrength;
-
-void submitData(){
-  influxDB.sendData(temperature, pressure, sinalStrength, smoke);
+  if(doorNewState != doorSensor.previousState){
+    int passedTime = (millis() - doorSensor.previousStateMillis);
+    bot.alert("Door was " + doorNewState + ", previous state time: " + timeUtil.millisToHuman(passedTime));
+    doorSensor.previousState = doorNewState;
+    doorSensor.previousStateMillis = millis();
+  } else if(doorNewState == "Opened"){
+    bot.alert("Door is still Open", true);
+  }
 }
 
-void readSensors(){
-    temperature = bmp280.getTemperature();
-    oled.setPageValue(smokeSensor.getName(), String(temperature));
-
-    pressure = bmp280.getPressure();
-    oled.setPageValue(smokeSensor.getName(), String(pressure));
-
-    smoke = smokeSensor.getValue();
-    oled.setPageValue(smokeSensor.getName(), String(smoke));
-
-    sinalStrength = wifi.getSinalStrength();
+void processMessage(String command){
+  bot.process(command);
 }
 
-void rotateDisplay(){
-    readSensors();
-
-    if(oledPermanent && oledActiveUntil < millis()){
-      oled.printMessage("");
-      return;
-    }
-
-    oled.printNextPage();
-}
-
-void readInputs(){
-
-  unsigned int whiteStatus = buttons.getWhiteStatus();
-  unsigned int greenStatus = buttons.getGreenStatus();
-
-  if(greenStatus == 2){
-    oledPermanent = true;
-    rotateDisplay();
-    return;
-  }
-
-  if(greenStatus == 1){
-    oledPermanent = false;
-    oledActiveUntil = 0;
-    rotateDisplay();
-  }
-
-  if(whiteStatus == 2){
-    oled.printNextPage();
-    oledActiveUntil = millis() + 10000;
-    rotateDisplay();
-  }
+void listenMessages(){
+  telegram.listenMessages(processMessage);
 }
 
 void setup() {
     Serial.begin(9600);
-    influxDB.setup();
     wifi.setup();
+    wifi.printWifiStatus();
+    telegram.setup();
 
-    oled.addPage(smokeSensor.getName());
-    oled.addPage(bmp280.getPressureLabel());
-    oled.addPage(bmp280.getTemperatureLabel());
+    bot.setup(telegram, doorSensor);
 
-    bmp280.setup();
-    buttons.setup();
+    bot.alert("System initialized");
+    bot.process("/status");
 
-    smokeSensor.setup();
-
-    thread100ms = new TimedAction(300, readInputs);
-    thread1s = new TimedAction(5000, rotateDisplay);
-    thread1m = new TimedAction(60000, submitData);
+    thread100ms = new TimedAction(1000, scanSensors);
+    thread1s = new TimedAction(1000, listenMessages);
 }
 
 void loop() {
   thread100ms->check();
   thread1s->check();
-  thread1m->check();
 }

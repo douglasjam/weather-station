@@ -1,1 +1,6 @@
 Myconfigs.h
+.piolibdeps
+.pioenvs
+.clang_complete
+.gcc-flags.json
+.travis.yml
